@@ -86,7 +86,8 @@ public class AlarmActivity extends Activity {
     kicker.setBackground(Ui.pill(0x00000000, Ui.FLARE, this));
     int kpad = Ui.dp(this, 12);
     kicker.setPadding(kpad, Ui.dp(this, 6), kpad, Ui.dp(this, 6));
-    card.addView(kicker);
+    // 同样要显式给 WRAP_CONTENT，否则垂直 LinearLayout 会把它拉成整行宽
+    card.addView(kicker, Ui.wrap());
 
     labelView = Ui.text(this, "", 30f, Ui.FG, true);
     labelView.setGravity(Gravity.CENTER);

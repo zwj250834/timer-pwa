@@ -187,7 +187,8 @@ public class MainActivity extends Activity {
     statusView.setBackground(Ui.pill(Color.TRANSPARENT, Ui.LINE, this));
     int padH = Ui.dp(this, 14);
     statusView.setPadding(padH, Ui.dp(this, 6), padH, Ui.dp(this, 6));
-    stopwatchPanel.addView(statusView);
+    // 垂直 LinearLayout 的默认子布局是 MATCH_PARENT，直接 addView 会把胶囊拉成整行宽
+    stopwatchPanel.addView(statusView, Ui.wrap());
 
     displayView = Ui.numerals(this, 42f, Ui.FG);
     displayView.setText("00:00:00.00");
@@ -237,36 +238,24 @@ public class MainActivity extends Activity {
     durationParams.topMargin = Ui.dp(this, 16);
     countdownPanel.addView(durationLabel, durationParams);
 
-    LinearLayout chips = Ui.row(this);
-    chips.setLayoutParams(Ui.wrap());
-    chipViews = new TextView[PRESET_MINUTES.length];
-    for (int i = 0; i < PRESET_MINUTES.length; i++) {
-      final int minutes = PRESET_MINUTES[i];
-      final TextView chip = Ui.outline(this, minutes + " 分钟", 14f, Ui.FG, Ui.LINE);
-      chip.setOnClickListener(view -> {
-        minutesInput.setText(String.valueOf(minutes));
-        secondsInput.setText("0");
-        highlightChips();
-      });
-      chipViews[i] = chip;
-      LinearLayout.LayoutParams chipParams = Ui.wrap();
-      chipParams.rightMargin = Ui.dp(this, 8);
-      chipParams.topMargin = Ui.dp(this, 8);
-      chips.addView(chip, chipParams);
-    }
-    countdownPanel.addView(chips);
+    countdownPanel.addView(buildChips());
 
     LinearLayout custom = Ui.row(this);
-    custom.setLayoutParams(Ui.wrap());
-    minutesInput = numberField("5", "分");
-    secondsInput = numberField("0", "秒");
-    LinearLayout.LayoutParams customParams = Ui.wrap();
-    customParams.topMargin = Ui.dp(this, 10);
-    custom.addView(minutesInput, customParams);
-    LinearLayout.LayoutParams secondParams = Ui.wrap();
-    secondParams.topMargin = Ui.dp(this, 10);
-    secondParams.leftMargin = Ui.dp(this, 10);
-    custom.addView(secondsInput, secondParams);
+    custom.setLayoutParams(
+        new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+    minutesInput = numberField("5");
+    secondsInput = numberField("0");
+    LinearLayout minGroup = unitField(minutesInput, "分");
+    LinearLayout secGroup = unitField(secondsInput, "秒");
+    LinearLayout.LayoutParams minParams = new LinearLayout.LayoutParams(0, heightWrap(), 1f);
+    minParams.topMargin = Ui.dp(this, 10);
+    minParams.rightMargin = Ui.dp(this, 5);
+    custom.addView(minGroup, minParams);
+    LinearLayout.LayoutParams secParams = new LinearLayout.LayoutParams(0, heightWrap(), 1f);
+    secParams.topMargin = Ui.dp(this, 10);
+    secParams.leftMargin = Ui.dp(this, 5);
+    custom.addView(secGroup, secParams);
     countdownPanel.addView(custom);
 
     carryoverView = Ui.text(this, "", 13f, Ui.FG_DIM, false);
@@ -284,17 +273,78 @@ public class MainActivity extends Activity {
     return countdownPanel;
   }
 
-  private EditText numberField(String value, String suffix) {
+  private int heightWrap() {
+    return LinearLayout.LayoutParams.WRAP_CONTENT;
+  }
+
+  /**
+   * 预设时长。横向 LinearLayout 不会换行，六个胶囊排不下就会溢出到外面，
+   * 所以手动排成两行、每行三个等宽胶囊。
+   */
+  private View buildChips() {
+    LinearLayout box = new LinearLayout(this);
+    box.setOrientation(LinearLayout.VERTICAL);
+    box.setLayoutParams(
+        new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+    chipViews = new TextView[PRESET_MINUTES.length];
+    int perRow = 3;
+    for (int row = 0; row < (PRESET_MINUTES.length + perRow - 1) / perRow; row++) {
+      LinearLayout line = Ui.row(this);
+      line.setLayoutParams(
+          new LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+      for (int column = 0; column < perRow; column++) {
+        int index = row * perRow + column;
+        if (index >= PRESET_MINUTES.length) break;
+        final int minutes = PRESET_MINUTES[index];
+        final TextView chip = Ui.outline(this, minutes + " 分钟", 14f, Ui.FG, Ui.LINE);
+        chip.setSingleLine(true);
+        chip.setGravity(Gravity.CENTER);
+        chip.setOnClickListener(view -> {
+          minutesInput.setText(String.valueOf(minutes));
+          secondsInput.setText("0");
+          highlightChips();
+        });
+        chipViews[index] = chip;
+
+        LinearLayout.LayoutParams chipParams =
+            new LinearLayout.LayoutParams(0, Ui.dp(this, 44), 1f);
+        chipParams.topMargin = Ui.dp(this, 8);
+        if (column < perRow - 1) chipParams.rightMargin = Ui.dp(this, 8);
+        line.addView(chip, chipParams);
+      }
+      box.addView(line);
+    }
+    return box;
+  }
+
+  /** 输入框 + 单位：单位单独放一个 TextView，值填了也看得见单位。 */
+  private LinearLayout unitField(EditText input, String unit) {
+    LinearLayout group = Ui.row(this);
+    group.setBackground(Ui.background(Ui.SURFACE_2, 14f, Ui.LINE, this));
+    int padH = Ui.dp(this, 12);
+    int padV = Ui.dp(this, 10);
+    group.setPadding(padH, padV, padH, padV);
+    input.setBackground(null);
+    group.addView(
+        input,
+        new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    group.addView(Ui.text(this, unit, 14f, Ui.FG_DIM, true));
+    return group;
+  }
+
+  private EditText numberField(String value) {
     EditText field = new EditText(this);
     field.setInputType(InputType.TYPE_CLASS_NUMBER);
     field.setText(value);
     field.setTextColor(Ui.FG);
     field.setTextSize(16f);
     field.setGravity(Gravity.CENTER);
-    field.setBackground(Ui.background(Ui.SURFACE_2, 14f, Ui.LINE, this));
-    field.setPadding(Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10));
-    field.setHint(suffix);
-    field.setMinWidth(Ui.dp(this, 96));
+    field.setPadding(0, 0, 0, 0);
+    field.setMinimumWidth(0);
+    field.setMinWidth(0);
     return field;
   }
 
@@ -628,7 +678,8 @@ public class MainActivity extends Activity {
   private void addPermissionRow(String title, String hint, boolean show, Runnable action) {
     if (!show) return;
     LinearLayout row = Ui.row(this);
-    row.setBackground(Ui.background(Ui.SURFACE_2, 14f, Ui.FLARE, this));
+    // 用琥珀色而不是警示红：这是「还差一步」的提示，不是错误
+    row.setBackground(Ui.background(Ui.SURFACE_2, 14f, 0x66F2A63C, this));
     int pad = Ui.dp(this, 14);
     row.setPadding(pad, Ui.dp(this, 12), pad, Ui.dp(this, 12));
     LinearLayout.LayoutParams rowParams =
@@ -639,7 +690,7 @@ public class MainActivity extends Activity {
 
     LinearLayout texts = new LinearLayout(this);
     texts.setOrientation(LinearLayout.VERTICAL);
-    texts.addView(Ui.text(this, title, 14f, Ui.FLARE, true));
+    texts.addView(Ui.text(this, title, 14f, Ui.AMBER_TEXT, true));
     TextView hintView = Ui.text(this, hint, 12f, Ui.FG_DIM, false);
     hintView.setPadding(0, Ui.dp(this, 2), 0, 0);
     texts.addView(hintView);

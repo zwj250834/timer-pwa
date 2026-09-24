@@ -651,9 +651,10 @@ body {
 
 .queue__foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
 }
 
 .queue__meta {
@@ -664,6 +665,8 @@ body {
 
 .queue__actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   flex: none;
   gap: 6px;
 }
@@ -694,6 +697,18 @@ body {
 
 .act[data-action='remove']:hover {
   color: var(--flare-text);
+}
+
+/* 「加入闹钟」是熄屏也能响的那条路，用强调色让它被看见 */
+.act[data-action='system-alarm'] {
+  color: var(--accent-text);
+  border-color: currentColor;
+}
+
+.act[data-action='system-alarm']:hover {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: transparent;
 }
 
 /* ---------- 历史记录 ---------- */

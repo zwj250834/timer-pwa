@@ -25,13 +25,18 @@ import {
   formatEndedAt,
   formatRemaining,
 } from './format.js';
+import { isFailedHandoff, openSystemAlarm, supportsSystemAlarm } from './system-alarm.js';
 
 const MODE_KEY = 'timer.mode.v1';
+/** 点了「加入闹钟」之后先记一笔，用于识别跳转失败（页面被 fallback 拉回来了）。 */
+const SYSTEM_ALARM_PENDING_KEY = 'timer.systemAlarm.pending';
 const STOPWATCH = 'stopwatch';
 const COUNTDOWN = 'countdown';
 /** 剩余时间少于这个值就进入「快到了」的视觉状态。 */
 const URGENT_MS = 30_000;
 const ICON = './icons/icon-192.png';
+/** 只有 Android 的 Chromium 系浏览器才给「加入闹钟」这个入口。 */
+const HAS_SYSTEM_ALARM = supportsSystemAlarm();
 
 const els = {
   // 正计时
@@ -264,7 +269,13 @@ function createQueueRow(item, isNext) {
     button.className = 'act';
     button.dataset.action = action.name;
     button.textContent = action.text;
-    button.setAttribute('aria-label', `${action.text}：${cap(item.label)}`);
+    if (action.title) button.title = action.title;
+    button.setAttribute(
+      'aria-label',
+      action.title
+        ? `${action.text}：${cap(item.label)}，${action.title}`
+        : `${action.text}：${cap(item.label)}`
+    );
     actions.append(button);
   }
 
@@ -286,10 +297,12 @@ function queueActions(item) {
       { name: 'remove', text: '删除' },
     ];
   }
-  return [
-    { name: 'toggle', text: item.state === CD_PAUSED ? '继续' : '暂停' },
-    { name: 'remove', text: '取消' },
-  ];
+  const actions = [{ name: 'toggle', text: item.state === CD_PAUSED ? '继续' : '暂停' }];
+  if (HAS_SYSTEM_ALARM) {
+    actions.push({ name: 'system-alarm', text: '加入闹钟', title: '按剩余时间加入系统闹钟，熄屏也会响' });
+  }
+  actions.push({ name: 'remove', text: '取消' });
+  return actions;
 }
 
 function queueProgress(item) {
@@ -463,6 +476,41 @@ async function ensureNotificationPermission() {
   const result = await requestNotificationPermission();
   if (result === 'granted') showToast('到点时会响铃，并弹出系统通知。');
   else if (result === 'denied') showToast('通知被拒绝了，倒计时到点仍会在页面里响铃。');
+}
+
+function rememberSystemAlarmRequest(at) {
+  try {
+    globalThis.sessionStorage?.setItem(
+      SYSTEM_ALARM_PENDING_KEY,
+      JSON.stringify({ at, ts: Date.now() })
+    );
+  } catch {
+    /* 记不住就算了，只是少一次失败提示 */
+  }
+}
+
+/**
+ * 启动时看一眼：如果页面是被 intent 的 fallback 拉回来的，
+ * 说明系统时钟 App 没被唤起，给用户一句解释而不是让他对着报错页发愣。
+ */
+function reportFailedHandoff() {
+  let raw = null;
+  try {
+    raw = globalThis.sessionStorage?.getItem(SYSTEM_ALARM_PENDING_KEY) ?? null;
+    globalThis.sessionStorage?.removeItem(SYSTEM_ALARM_PENDING_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) return;
+  let record = null;
+  try {
+    record = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (isFailedHandoff(record)) {
+    showToast('没能唤起系统时钟 App，倒计时会继续在页面内响铃。');
+  }
 }
 
 async function notifySystem(item) {
@@ -733,6 +781,30 @@ function onQueueClick(event) {
   } else if (action === 'remove') {
     void closeSystemNotifications({ tag: `countdown-${id}`, registration: swRegistration });
     countdowns.remove(id);
+  } else if (action === 'system-alarm') {
+    const item = countdowns.list().find((entry) => entry.id === id);
+    if (!item) return;
+    const at = Date.now() + item.remainingMs;
+    rememberSystemAlarmRequest(at);
+    openSystemAlarm({
+      at,
+      label: item.label,
+      // 必须在点击手势里跳转，Chrome 才会把这个 intent 交给时钟 App。
+      navigate: (url) => {
+        window.location.href = url;
+      },
+      // 时钟 App 不存在或浏览器不支持时，Chrome 会把我们送回这一页，
+      // 比停在一个「无法打开」的报错页要好。
+      fallbackUrl: window.location.href,
+      isStillHere: () => document.visibilityState === 'visible' && document.hasFocus(),
+      onBlocked: () => {
+        showToast('没能唤起系统时钟 App，倒计时会继续在页面内响铃。');
+      },
+    });
+    showToast(`已请求系统闹钟：${formatClock(at)} 响，熄屏也会叫你。`);
+    renderCarryover();
+    updateTitle();
+    return;
   } else if (action === 'repeat') {
     const item = countdowns.repeat(id);
     if (!item) {
@@ -834,6 +906,7 @@ function init() {
   registerServiceWorker();
   // 打开时先结算一次：离线期间到点的倒计时会在这里被接住。
   tickCountdowns();
+  reportFailedHandoff();
   void acquireWakeLock();
 }
 

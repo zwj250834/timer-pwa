@@ -25,18 +25,17 @@ import {
   formatEndedAt,
   formatRemaining,
 } from './format.js';
-import { isFailedHandoff, openSystemAlarm, supportsSystemAlarm } from './system-alarm.js';
+import { createKeepAlive, isAndroid } from './keep-alive.js';
 
 const MODE_KEY = 'timer.mode.v1';
-/** 点了「加入闹钟」之后先记一笔，用于识别跳转失败（页面被 fallback 拉回来了）。 */
-const SYSTEM_ALARM_PENDING_KEY = 'timer.systemAlarm.pending';
+const KEEP_ALIVE_KEY = 'timer.keepAlive.v1';
 const STOPWATCH = 'stopwatch';
 const COUNTDOWN = 'countdown';
 /** 剩余时间少于这个值就进入「快到了」的视觉状态。 */
 const URGENT_MS = 30_000;
 const ICON = './icons/icon-192.png';
-/** 只有 Android 的 Chromium 系浏览器才给「加入闹钟」这个入口。 */
-const HAS_SYSTEM_ALARM = supportsSystemAlarm();
+/** 保活只在 Android 上有意义，iOS 会在后台直接挂起 JS。 */
+const IS_ANDROID = isAndroid();
 
 const els = {
   // 正计时
@@ -66,6 +65,9 @@ const els = {
   carryover: document.getElementById('carryover'),
   carryoverText: document.getElementById('carryover-text'),
   carryoverBtn: document.getElementById('carryover-btn'),
+  keepAliveRow: document.getElementById('keep-alive-row'),
+  keepAlive: document.getElementById('keep-alive'),
+  keepAliveWarn: document.getElementById('keep-alive-warn'),
   // 提示层
   toast: document.getElementById('toast'),
   alarm: document.getElementById('alarm'),
@@ -98,6 +100,8 @@ let alarmTimer = 0;
 let wakeLock = null;
 let swRegistration = null;
 let notificationAsked = false;
+let keepAliveOn = IS_ANDROID && readKeepAliveSetting();
+let keepAliveShould = false;
 
 /** 等待响铃的项，按到点顺序排队。 */
 let ringing = false;
@@ -142,6 +146,7 @@ const countdowns = createCountdowns({ onStorageError });
 const resetGuard = createResetGuard();
 const siren = createSiren();
 const vibrator = createVibrator();
+const keepAlive = createKeepAlive();
 
 /* ---------- 正计时渲染 ---------- */
 
@@ -297,12 +302,10 @@ function queueActions(item) {
       { name: 'remove', text: '删除' },
     ];
   }
-  const actions = [{ name: 'toggle', text: item.state === CD_PAUSED ? '继续' : '暂停' }];
-  if (HAS_SYSTEM_ALARM) {
-    actions.push({ name: 'system-alarm', text: '加入闹钟', title: '按剩余时间加入系统闹钟，熄屏也会响' });
-  }
-  actions.push({ name: 'remove', text: '取消' });
-  return actions;
+  return [
+    { name: 'toggle', text: item.state === CD_PAUSED ? '继续' : '暂停' },
+    { name: 'remove', text: '取消' },
+  ];
 }
 
 function queueProgress(item) {
@@ -460,6 +463,69 @@ async function releaseWakeLock() {
   }
 }
 
+/* ---------- 锁屏保活 ---------- */
+
+function readKeepAliveSetting() {
+  try {
+    const raw = globalThis.localStorage?.getItem(KEEP_ALIVE_KEY);
+    if (raw === 'off') return false;
+    if (raw === 'on') return true;
+  } catch {
+    /* 读不到就用默认值 */
+  }
+  // 默认开：倒计时的意义就是到点有人叫你，熄屏不响等于没设。
+  return true;
+}
+
+function writeKeepAliveSetting(value) {
+  try {
+    globalThis.localStorage?.setItem(KEEP_ALIVE_KEY, value ? 'on' : 'off');
+  } catch {
+    /* 记不住设定不影响本次使用 */
+  }
+}
+
+/**
+ * 有倒计时在跑（或正在响铃）时保持后台运行，让浏览器别在熄屏后被冻结。
+ * 播放必须由手势启动，所以被拒绝时不做任何事，等下一次手势再试。
+ */
+function syncKeepAlive({ force = false } = {}) {
+  const should = keepAliveOn && (countdowns.activeCount > 0 || ringing);
+  if (!force && should === keepAliveShould) return;
+  keepAliveShould = should;
+  if (should) {
+    keepAlive.start();
+    // play() 是异步的，稍等一下再看它有没有真的播起来（被自动播放策略挡住时给个提示）。
+    window.setTimeout(renderKeepAliveState, 400);
+  } else {
+    keepAlive.stop();
+    renderKeepAliveState();
+  }
+}
+
+/** 保活没跑起来时直说，并告诉用户点一下屏幕就能恢复。 */
+function renderKeepAliveState() {
+  const wanted = keepAliveOn && (countdowns.activeCount > 0 || ringing);
+  els.keepAliveWarn.hidden = !(wanted && !keepAlive.playing);
+}
+
+function onKeepAliveChange() {
+  keepAliveOn = IS_ANDROID && els.keepAlive.checked;
+  writeKeepAliveSetting(els.keepAlive.checked);
+  syncKeepAlive({ force: true });
+  showToast(
+    keepAliveOn
+      ? '倒计时期间会保持后台运行，熄屏也尽量叫醒你。'
+      : '已关闭锁屏保持，熄屏后可能不会响。'
+  );
+}
+
+function setupKeepAlive() {
+  els.keepAliveRow.hidden = !IS_ANDROID;
+  els.keepAlive.checked = keepAliveOn;
+  syncKeepAlive({ force: true });
+}
+
 /** 图标上的小红点：系统层面再提醒一次「有事项到点了」。 */
 function setAppBadge(count) {
   try {
@@ -476,41 +542,6 @@ async function ensureNotificationPermission() {
   const result = await requestNotificationPermission();
   if (result === 'granted') showToast('到点时会响铃，并弹出系统通知。');
   else if (result === 'denied') showToast('通知被拒绝了，倒计时到点仍会在页面里响铃。');
-}
-
-function rememberSystemAlarmRequest(at) {
-  try {
-    globalThis.sessionStorage?.setItem(
-      SYSTEM_ALARM_PENDING_KEY,
-      JSON.stringify({ at, ts: Date.now() })
-    );
-  } catch {
-    /* 记不住就算了，只是少一次失败提示 */
-  }
-}
-
-/**
- * 启动时看一眼：如果页面是被 intent 的 fallback 拉回来的，
- * 说明系统时钟 App 没被唤起，给用户一句解释而不是让他对着报错页发愣。
- */
-function reportFailedHandoff() {
-  let raw = null;
-  try {
-    raw = globalThis.sessionStorage?.getItem(SYSTEM_ALARM_PENDING_KEY) ?? null;
-    globalThis.sessionStorage?.removeItem(SYSTEM_ALARM_PENDING_KEY);
-  } catch {
-    return;
-  }
-  if (!raw) return;
-  let record = null;
-  try {
-    record = JSON.parse(raw);
-  } catch {
-    return;
-  }
-  if (isFailedHandoff(record)) {
-    showToast('没能唤起系统时钟 App，倒计时会继续在页面内响铃。');
-  }
 }
 
 async function notifySystem(item) {
@@ -583,6 +614,7 @@ function stopRinging() {
   document.body.classList.remove('is-ringing');
   els.alarm.hidden = true;
   void releaseWakeLock();
+  syncKeepAlive();
   renderQueue();
   updateTitle();
 }
@@ -632,6 +664,7 @@ function tickCountdowns() {
   } else {
     refreshQueueReadouts();
   }
+  syncKeepAlive();
   renderCarryover();
   updateTitle();
 }
@@ -751,6 +784,7 @@ function onCountdownSubmit(event) {
   }
 
   siren.unlock();
+  syncKeepAlive({ force: true });
   void ensureNotificationPermission();
   scheduleTrigger(item);
   void acquireWakeLock();
@@ -781,30 +815,6 @@ function onQueueClick(event) {
   } else if (action === 'remove') {
     void closeSystemNotifications({ tag: `countdown-${id}`, registration: swRegistration });
     countdowns.remove(id);
-  } else if (action === 'system-alarm') {
-    const item = countdowns.list().find((entry) => entry.id === id);
-    if (!item) return;
-    const at = Date.now() + item.remainingMs;
-    rememberSystemAlarmRequest(at);
-    openSystemAlarm({
-      at,
-      label: item.label,
-      // 必须在点击手势里跳转，Chrome 才会把这个 intent 交给时钟 App。
-      navigate: (url) => {
-        window.location.href = url;
-      },
-      // 时钟 App 不存在或浏览器不支持时，Chrome 会把我们送回这一页，
-      // 比停在一个「无法打开」的报错页要好。
-      fallbackUrl: window.location.href,
-      isStillHere: () => document.visibilityState === 'visible' && document.hasFocus(),
-      onBlocked: () => {
-        showToast('没能唤起系统时钟 App，倒计时会继续在页面内响铃。');
-      },
-    });
-    showToast(`已请求系统闹钟：${formatClock(at)} 响，熄屏也会叫你。`);
-    renderCarryover();
-    updateTitle();
-    return;
   } else if (action === 'repeat') {
     const item = countdowns.repeat(id);
     if (!item) {
@@ -815,6 +825,7 @@ function onQueueClick(event) {
     }
   }
 
+  syncKeepAlive();
   renderQueue();
   renderCarryover();
   updateTitle();
@@ -822,6 +833,7 @@ function onQueueClick(event) {
 
 function onQueueClear() {
   if (countdowns.clearFired()) {
+    syncKeepAlive();
     renderQueue();
     showToast('已清掉响过的提醒。');
   }
@@ -838,6 +850,7 @@ function bindEvents() {
   els.secInput.addEventListener('input', syncChips);
   els.queue.addEventListener('click', onQueueClick);
   els.queueClear.addEventListener('click', onQueueClear);
+  els.keepAlive.addEventListener('change', onKeepAliveChange);
   els.alarmStop.addEventListener('click', dismissAlarm);
 
   for (const button of els.modeBtns) {
@@ -867,15 +880,24 @@ function bindEvents() {
   );
 
   // 首次用户交互时唤醒音频通道，这样到点响铃才有声音。
-  const unlock = () => siren.unlock();
-  document.addEventListener('pointerdown', unlock, { once: true, passive: true });
-  document.addEventListener('keydown', unlock, { once: true });
+  let audioUnlocked = false;
+  const onUserGesture = () => {
+    if (!audioUnlocked) {
+      audioUnlocked = true;
+      siren.unlock();
+    }
+    // 保活播放需要手势授权，每次手势都顺手确认一遍它还在跑。
+    syncKeepAlive({ force: true });
+  };
+  document.addEventListener('pointerdown', onUserGesture, { passive: true });
+  document.addEventListener('keydown', onUserGesture);
 
   // 回到前台时立刻用墙钟重算一次，读数不会因为后台节流而落后。
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     tickCountdowns();
     renderAll();
+    syncKeepAlive({ force: true });
     void acquireWakeLock();
   });
 
@@ -901,12 +923,12 @@ function init() {
   bindEvents();
   setMode(mode);
   syncChips();
+  setupKeepAlive();
   ensureLoop();
   ensureCountdownTimer();
   registerServiceWorker();
   // 打开时先结算一次：离线期间到点的倒计时会在这里被接住。
   tickCountdowns();
-  reportFailedHandoff();
   void acquireWakeLock();
 }
 

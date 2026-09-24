@@ -124,6 +124,19 @@
 
             <button id="cd-submit" class="btn btn--primary" type="submit">开始倒计时</button>
           </form>
+
+          <label id="keep-alive-row" class="switch" for="keep-alive" hidden>
+            <input id="keep-alive" class="switch__input" type="checkbox" />
+            <span class="switch__body">
+              <span class="switch__title">熄屏也保持响铃</span>
+              <span class="switch__hint">
+                倒计时期间循环播放一段听不见的音频，让浏览器不被系统冻结，熄屏才有机会准点响。会略微费电。
+              </span>
+              <span id="keep-alive-warn" class="switch__warn" hidden>
+                熄屏保持还没生效：点一下屏幕就能恢复。
+              </span>
+            </span>
+          </label>
         </div>
       </section>
 

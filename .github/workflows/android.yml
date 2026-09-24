@@ -45,6 +45,29 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      # 签名密钥要跨次构建保持一致，否则每装一次新版都得先卸载。
+      # 缓存保存在仓库的 Actions 缓存里（不是公开文件），过期后会自动重新生成。
+      - name: 恢复调试签名密钥
+        if: steps.logic.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: 没有签名密钥就生成一个
+        if: steps.logic.outcome == 'success'
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -storetype PKCS12 \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
       - name: Accept Android SDK licenses
         if: steps.logic.outcome == 'success'
         run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
@@ -65,6 +88,12 @@ jobs:
           name: timer-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: 打印签名信息（确认密钥一致）
+        if: steps.build.outcome == 'success'
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -storepass android 2>/dev/null \
+            | grep -E "所有者|Owner|SHA256|有效期|Valid" | head -4 || true
 
       # 固定地址：https://github.com/<owner>/<repo>/releases/download/android-latest/app-debug.apk
       - name: 发布到 Release

@@ -11,7 +11,7 @@ npm run build # 生成可部署的 dist/
 npm run icons # 重新生成图标 PNG
 ```
 
-需要 Node >= 22.8（测试用到了 `--test-isolation=none`）。
+需要 Node >= 22.8（测试用到了 `--experimental-test-isolation=none`，让测试文件在单进程内运行）。
 
 ## 手机上安装
 

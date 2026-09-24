@@ -97,6 +97,7 @@ jobs:
 
       # 固定地址：https://github.com/<owner>/<repo>/releases/download/android-latest/app-debug.apk
       - name: 发布到 Release
+        id: release
         if: steps.build.outcome == 'success'
         continue-on-error: true
         uses: softprops/action-gh-release@v2
@@ -111,15 +112,33 @@ jobs:
             首次启动按应用内提示授予「闹钟与提醒」「通知」「锁屏全屏提醒」权限。
           files: android/app/build/outputs/apk/debug/app-debug.apk
 
-      # 构建日志对排查很关键，失败时把它推到 ci-logs 分支，方便直接读
-      - name: 失败时把日志推到 ci-logs 分支
-        if: failure() || steps.logic.outcome != 'success' || steps.build.outcome == 'failure'
+      # 构建结果与日志都推到 ci-logs 分支：既能核对产物，又能在构建失败时直接读日志
+      - name: 把构建结果写到 ci-logs 分支
+        if: always()
         continue-on-error: true
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          { echo "=== 逻辑自测 ==="; [ -f ci-logic.txt ] && cat ci-logic.txt || echo "(未运行)"; echo; echo "=== 构建 ==="; [ -f ci-build.txt ] && cat ci-build.txt || echo "(未运行)"; } > ci-log.txt
-          git checkout -b ci-logs
-          git add -f ci-log.txt
-          git commit -m "ci: 构建日志 ${{ github.run_number }}"
+          {
+            echo "commit: ${{ github.sha }}"
+            echo "run: ${{ github.run_number }}"
+            echo "logic: ${{ steps.logic.outcome }}"
+            echo "build: ${{ steps.build.outcome }}"
+            echo "release: ${{ steps.release.outcome }}"
+            apk=android/app/build/outputs/apk/debug/app-debug.apk
+            if [ -f "$apk" ]; then
+              echo "apk_sha256: $(sha256sum "$apk" | cut -d' ' -f1)"
+              echo "apk_bytes: $(stat -c%s "$apk")"
+            fi
+            echo
+            echo "=== 逻辑自测 ==="
+            [ -f ci-logic.txt ] && cat ci-logic.txt || echo "(未运行)"
+            echo
+            echo "=== 构建 ==="
+            [ -f ci-build.txt ] && cat ci-build.txt || echo "(未运行)"
+          } > ci-status.txt
+          cat ci-status.txt
+          git checkout -b ci-logs 2>/dev/null || git checkout ci-logs
+          git add -f ci-status.txt
+          git commit -m "build ${{ github.run_number }}" || true
           git push -f origin ci-logs

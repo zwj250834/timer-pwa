@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>计时器</title>
+    <meta name="description" content="正计时秒表：开始、暂停、继续、重置，保留最近 10 条历史记录。" />
+    <meta name="theme-color" content="#0b1220" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="计时器" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
+
+    <main class="app">
+      <section class="timer" aria-labelledby="timer-heading">
+        <h1 id="timer-heading" class="visually-hidden">计时器</h1>
+        <p class="timer__status" id="status">就绪</p>
+        <p class="timer__display" id="display">00:00:00.00</p>
+
+        <div class="timer__actions">
+          <button id="main-btn" class="btn btn--primary" type="button" data-state="idle">开始</button>
+          <button id="reset-btn" class="btn btn--ghost" type="button" disabled>重置</button>
+        </div>
+      </section>
+
+      <section class="history" aria-labelledby="history-heading">
+        <header class="history__header">
+          <h2 id="history-heading">历史记录</h2>
+          <span class="history__count"><span id="history-count">0</span>/10</span>
+        </header>
+
+        <p id="history-empty" class="history__empty">暂无记录。每次暂停计时，都会在这里留下一条。</p>
+        <ol id="history-list" class="history__list"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

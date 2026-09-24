@@ -1,0 +1,16 @@
+{
+  "name": "timer-pwa",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "零依赖秒表 PWA：开始、暂停、继续、重置，保留最近 10 条历史记录。",
+  "scripts": {
+    "test": "node --test --test-isolation=none \"tests/*.test.js\"",
+    "dev": "node scripts/dev-server.mjs",
+    "build": "node scripts/build.mjs",
+    "icons": "node scripts/gen-icons.mjs"
+  },
+  "engines": {
+    "node": ">=22.8"
+  }
+}

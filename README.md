@@ -35,6 +35,19 @@ npm run icons # 重新生成图标 PNG
 
 推送到 `main` 分支后，`.github/workflows/deploy-pages.yml` 会跑测试、构建 `dist/` 并发布到 GitHub Pages。
 
+### 首次部署需要的一次性设置
+
+新建仓库的 `GITHUB_TOKEN` 默认只有只读权限，无法自行创建 Pages 站点，
+所以第一次需要在仓库网页上点两下（都在 Settings 里）：
+
+1. **Settings → Actions → General → Workflow permissions**
+   选「Read and write permissions」→ Save。
+2. **Settings → Pages → Build and deployment → Source**
+   选「GitHub Actions」。
+
+完成后往 `main` 推一次（或重跑失败的 workflow），站点就会发布到
+`https://<用户名>.github.io/timer-pwa/`。
+
 ## 目录
 
 ```

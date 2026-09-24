@@ -1,9 +1,40 @@
 import { createTimer, IDLE, PAUSED, RUNNING } from './timer.js';
 import { createHistory } from './history.js';
-import { formatDuration, formatEndedAt } from './format.js';
 import { createResetGuard, RESET_CONFIRM_MS } from './reset-guard.js';
+import {
+  createCountdowns,
+  FIRED as CD_FIRED,
+  PAUSED as CD_PAUSED,
+  RUNNING as CD_RUNNING,
+  MAX_DURATION_MS,
+  MIN_DURATION_MS,
+} from './countdown.js';
+import {
+  ALARM_AUTO_STOP_MS,
+  closeSystemNotifications,
+  createSiren,
+  createVibrator,
+  requestNotificationPermission,
+  scheduleSystemTrigger,
+  showSystemNotification,
+} from './alarm.js';
+import {
+  describeDuration,
+  formatClock,
+  formatDuration,
+  formatEndedAt,
+  formatRemaining,
+} from './format.js';
+
+const MODE_KEY = 'timer.mode.v1';
+const STOPWATCH = 'stopwatch';
+const COUNTDOWN = 'countdown';
+/** 剩余时间少于这个值就进入「快到了」的视觉状态。 */
+const URGENT_MS = 30_000;
+const ICON = './icons/icon-192.png';
 
 const els = {
+  // 正计时
   display: document.getElementById('display'),
   status: document.getElementById('status'),
   mainBtn: document.getElementById('main-btn'),
@@ -11,7 +42,32 @@ const els = {
   list: document.getElementById('history-list'),
   empty: document.getElementById('history-empty'),
   count: document.getElementById('history-count'),
+  historyView: document.getElementById('history-view'),
+  // 模式
+  modeBtns: Array.from(document.querySelectorAll('.mode__btn')),
+  stopwatchView: document.getElementById('stopwatch-view'),
+  countdownView: document.getElementById('countdown-view'),
+  queueView: document.getElementById('queue-view'),
+  // 倒计时
+  form: document.getElementById('countdown-form'),
+  labelInput: document.getElementById('cd-label'),
+  presets: document.getElementById('cd-presets'),
+  minInput: document.getElementById('cd-min'),
+  secInput: document.getElementById('cd-sec'),
+  queue: document.getElementById('queue'),
+  queueEmpty: document.getElementById('queue-empty'),
+  queueCount: document.getElementById('queue-count'),
+  queueClear: document.getElementById('queue-clear'),
+  carryover: document.getElementById('carryover'),
+  carryoverText: document.getElementById('carryover-text'),
+  carryoverBtn: document.getElementById('carryover-btn'),
+  // 提示层
   toast: document.getElementById('toast'),
+  alarm: document.getElementById('alarm'),
+  alarmLabel: document.getElementById('alarm-label'),
+  alarmMeta: document.getElementById('alarm-meta'),
+  alarmMore: document.getElementById('alarm-more'),
+  alarmStop: document.getElementById('alarm-stop'),
 };
 
 const STATUS_TEXT = {
@@ -26,10 +82,37 @@ const MAIN_TEXT = {
   [PAUSED]: '继续',
 };
 
+let mode = readMode();
+
 let storageWarningShown = false;
 let toastTimer = 0;
 let frameHandle = 0;
 let resetTimer = 0;
+let countdownTimer = 0;
+let alarmTimer = 0;
+let wakeLock = null;
+let swRegistration = null;
+let notificationAsked = false;
+
+/** 等待响铃的项，按到点顺序排队。 */
+let ringing = false;
+let alarmQueue = [];
+
+function readMode() {
+  try {
+    return globalThis.localStorage?.getItem(MODE_KEY) === COUNTDOWN ? COUNTDOWN : STOPWATCH;
+  } catch {
+    return STOPWATCH;
+  }
+}
+
+function writeMode(value) {
+  try {
+    globalThis.localStorage?.setItem(MODE_KEY, value);
+  } catch {
+    /* 记不住也无所谓 */
+  }
+}
 
 function showToast(message) {
   if (!els.toast) return;
@@ -45,18 +128,24 @@ function onStorageError(error) {
   if (storageWarningShown) return;
   storageWarningShown = true;
   console.warn('[timer] 本地存储不可用：', error);
-  showToast('本机存储不可用，历史记录只在本次打开期间保留。');
+  showToast('本机存储不可用，这次的记录只在打开期间保留。');
 }
 
 const timer = createTimer();
 const history = createHistory({ onStorageError });
+const countdowns = createCountdowns({ onStorageError });
 const resetGuard = createResetGuard();
+const siren = createSiren();
+const vibrator = createVibrator();
+
+/* ---------- 正计时渲染 ---------- */
 
 function renderTimer() {
   const text = formatDuration(timer.elapsedMs());
   if (els.display.textContent !== text) els.display.textContent = text;
 
   els.status.textContent = STATUS_TEXT[timer.state];
+  els.status.dataset.state = timer.state;
   els.mainBtn.textContent = MAIN_TEXT[timer.state];
   els.mainBtn.dataset.state = timer.state;
 
@@ -108,25 +197,406 @@ function renderHistory() {
   els.list.replaceChildren(fragment);
 }
 
+/* ---------- 倒计时渲染 ---------- */
+
+function cap(text) {
+  return text || '未填写事项';
+}
+
+/** 条目：运行中显示剩余读数，已响铃的显示状态徽标。 */
+function createQueueRow(item, isNext) {
+  const row = document.createElement('li');
+  row.className = 'queue__item';
+  row.dataset.id = item.id;
+  row.dataset.state = item.state;
+  if (isNext) row.dataset.next = 'true';
+  if (item.state === CD_RUNNING && item.remainingMs <= URGENT_MS) row.dataset.urgent = 'true';
+
+  const head = document.createElement('div');
+  head.className = 'queue__head';
+
+  if (item.state === CD_FIRED) {
+    const flag = document.createElement('span');
+    flag.className = 'queue__flag';
+    flag.textContent = item.missed ? '已错过' : '已响铃';
+    head.append(flag);
+  } else {
+    const time = document.createElement('span');
+    time.className = 'queue__time';
+    time.dataset.role = 'time';
+    time.textContent = formatRemaining(item.remainingMs);
+    head.append(time);
+  }
+
+  const label = document.createElement('span');
+  label.className = 'queue__label';
+  label.textContent = cap(item.label);
+  head.append(label);
+
+  row.append(head);
+
+  let fill = null;
+  if (item.state !== CD_FIRED) {
+    const rail = document.createElement('div');
+    rail.className = 'queue__rail';
+    rail.setAttribute('aria-hidden', 'true');
+    fill = document.createElement('span');
+    fill.className = 'queue__fill';
+    fill.dataset.role = 'fill';
+    fill.style.width = `${(queueProgress(item) * 100).toFixed(2)}%`;
+    rail.append(fill);
+    row.append(rail);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'queue__foot';
+
+  const meta = document.createElement('span');
+  meta.className = 'queue__meta';
+  meta.dataset.role = 'meta';
+  meta.textContent = queueMeta(item);
+
+  const actions = document.createElement('div');
+  actions.className = 'queue__actions';
+  for (const action of queueActions(item)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'act';
+    button.dataset.action = action.name;
+    button.textContent = action.text;
+    button.setAttribute('aria-label', `${action.text}：${cap(item.label)}`);
+    actions.append(button);
+  }
+
+  foot.append(meta, actions);
+  row.append(foot);
+  return row;
+}
+
+function queueMeta(item) {
+  if (item.state === CD_FIRED) return `原定 ${formatClock(item.firedAt)} 提醒`;
+  if (item.state === CD_PAUSED) return '已暂停';
+  return `${formatClock(item.endsAt)} 提醒`;
+}
+
+function queueActions(item) {
+  if (item.state === CD_FIRED) {
+    return [
+      { name: 'repeat', text: '再来一次' },
+      { name: 'remove', text: '删除' },
+    ];
+  }
+  return [
+    { name: 'toggle', text: item.state === CD_PAUSED ? '继续' : '暂停' },
+    { name: 'remove', text: '取消' },
+  ];
+}
+
+function queueProgress(item) {
+  if (item.state === CD_FIRED) return 0;
+  if (!item.durationMs) return 0;
+  return Math.min(1, Math.max(0, item.remainingMs / item.durationMs));
+}
+
+function nextIdOf(items) {
+  let next = null;
+  for (const item of items) {
+    if (item.state === CD_FIRED) continue;
+    if (!next || item.remainingMs < next.remainingMs) next = item;
+  }
+  return next ? next.id : null;
+}
+
+function renderQueue() {
+  const items = countdowns.list();
+  els.queueCount.textContent = String(items.length);
+  els.queueEmpty.hidden = items.length > 0;
+  els.queueClear.hidden = !items.some((item) => item.state === CD_FIRED);
+
+  const nextId = nextIdOf(items);
+  const fragment = document.createDocumentFragment();
+  for (const item of items) {
+    fragment.append(createQueueRow(item, item.id === nextId));
+  }
+  els.queue.replaceChildren(fragment);
+}
+
+/** 只刷新随时间变化的读数，不动 DOM 结构（每帧都要跑）。 */
+function refreshQueueReadouts() {
+  const items = countdowns.list();
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const nextId = nextIdOf(items);
+
+  for (const row of els.queue.children) {
+    const item = byId.get(row.dataset.id);
+    if (!item || item.state === CD_FIRED) continue;
+
+    const time = row.querySelector('[data-role="time"]');
+    if (time) {
+      const text = formatRemaining(item.remainingMs);
+      if (time.textContent !== text) time.textContent = text;
+    }
+
+    const fill = row.querySelector('[data-role="fill"]');
+    if (fill) fill.style.width = `${(queueProgress(item) * 100).toFixed(2)}%`;
+
+    const meta = row.querySelector('[data-role="meta"]');
+    if (meta) {
+      const text = queueMeta(item);
+      if (meta.textContent !== text) meta.textContent = text;
+    }
+
+    const urgent = item.state === CD_RUNNING && item.remainingMs <= URGENT_MS;
+    if (row.dataset.urgent !== String(urgent)) row.dataset.urgent = String(urgent);
+
+    const isNext = item.id === nextId;
+    if (isNext) row.dataset.next = 'true';
+    else delete row.dataset.next;
+  }
+}
+
+/** 正计时还在跑的时候切到倒计时，给一条提示，避免忘了它。 */
+function renderCarryover() {
+  const visible = mode === COUNTDOWN && timer.state !== IDLE;
+  els.carryover.hidden = !visible;
+  if (!visible) return;
+  els.carryoverText.textContent = `${
+    timer.state === RUNNING ? '正计时还在跑' : '正计时已暂停'
+  }：${formatDuration(timer.elapsedMs())}`;
+}
+
 function renderAll() {
   renderTimer();
   renderHistory();
+  renderQueue();
+  renderCarryover();
+}
+
+/* ---------- 模式切换 ---------- */
+
+function setMode(next) {
+  mode = next === COUNTDOWN ? COUNTDOWN : STOPWATCH;
+  writeMode(mode);
+  document.body.dataset.mode = mode;
+
+  for (const button of els.modeBtns) {
+    button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
+  }
+
+  const counting = mode === COUNTDOWN;
+  els.stopwatchView.hidden = counting;
+  els.historyView.hidden = counting;
+  els.countdownView.hidden = !counting;
+  els.queueView.hidden = !counting;
+
+  renderAll();
+  ensureLoop();
+  updateTitle();
 }
 
 /* ---------- 计时循环 ---------- */
 
-function tick() {
+function loopFrame() {
+  frameHandle = 0;
   renderTimer();
-  frameHandle = timer.state === RUNNING ? window.requestAnimationFrame(tick) : 0;
+  if (timer.state === RUNNING) frameHandle = window.requestAnimationFrame(loopFrame);
 }
 
 function ensureLoop() {
   if (timer.state === RUNNING && !frameHandle) {
-    frameHandle = window.requestAnimationFrame(tick);
+    frameHandle = window.requestAnimationFrame(loopFrame);
   }
 }
 
-/* ---------- 交互 ---------- */
+function updateTitle() {
+  if (ringing) {
+    document.title = `时间到：${cap(alarmQueue[0]?.label)}`;
+    return;
+  }
+  if (mode !== COUNTDOWN) {
+    document.title = '计时器';
+    return;
+  }
+  const items = countdowns.list().filter((item) => item.state !== CD_FIRED);
+  document.title = items.length ? `${formatRemaining(items[0].remainingMs)} ${cap(items[0].label)}` : '倒计时';
+}
+
+/* ---------- 系统闹钟能力 ---------- */
+
+async function acquireWakeLock() {
+  if (wakeLock || document.hidden) return;
+  if (!countdowns.activeCount) return;
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener?.('release', () => {
+      wakeLock = null;
+    });
+  } catch {
+    wakeLock = null;
+  }
+}
+
+async function releaseWakeLock() {
+  const lock = wakeLock;
+  wakeLock = null;
+  try {
+    await lock?.release();
+  } catch {
+    /* 已经释放 */
+  }
+}
+
+/** 图标上的小红点：系统层面再提醒一次「有事项到点了」。 */
+function setAppBadge(count) {
+  try {
+    if (count > 0) navigator.setAppBadge?.(count);
+    else navigator.clearAppBadge?.();
+  } catch {
+    /* 不支持就跳过 */
+  }
+}
+
+async function ensureNotificationPermission() {
+  if (notificationAsked) return;
+  notificationAsked = true;
+  const result = await requestNotificationPermission();
+  if (result === 'granted') showToast('到点时会响铃，并弹出系统通知。');
+  else if (result === 'denied') showToast('通知被拒绝了，倒计时到点仍会在页面里响铃。');
+}
+
+async function notifySystem(item) {
+  return showSystemNotification({
+    title: `时间到：${cap(item.label)}`,
+    body: `设定了 ${describeDuration(item.durationMs)} 的提醒，现在 ${formatClock(Date.now())}。`,
+    tag: `countdown-${item.id}`,
+    icon: ICON,
+    badge: ICON,
+    registration: swRegistration,
+  });
+}
+
+/** 部分 Chromium 支持把通知交给系统在指定时刻投递，页面挂起也不会迟到。 */
+function scheduleTrigger(item) {
+  return scheduleSystemTrigger({
+    title: `时间到：${cap(item.label)}`,
+    body: `设定了 ${describeDuration(item.durationMs)} 的提醒。`,
+    tag: `countdown-${item.id}`,
+    at: item.endsAt,
+    registration: swRegistration,
+  });
+}
+
+/* ---------- 响铃 ---------- */
+
+function renderAlarmCard() {
+  const item = alarmQueue[0];
+  if (!item) return;
+  els.alarmLabel.textContent = cap(item.label);
+  els.alarmMeta.textContent = `设定了 ${describeDuration(item.durationMs)}，现在 ${formatClock(
+    Date.now()
+  )}。`;
+  const rest = alarmQueue.length - 1;
+  els.alarmMore.hidden = rest <= 0;
+  els.alarmMore.textContent = rest > 0 ? `另外还有 ${rest} 项到时间了，停止后会接着响。` : '';
+}
+
+function armAlarmTimeout() {
+  window.clearTimeout(alarmTimer);
+  alarmTimer = window.setTimeout(() => {
+    alarmTimer = 0;
+    stopRinging();
+  }, ALARM_AUTO_STOP_MS);
+}
+
+function startRinging(focus) {
+  if (!alarmQueue.length) return;
+  ringing = true;
+  document.body.classList.add('is-ringing');
+  els.alarm.hidden = false;
+  renderAlarmCard();
+  armAlarmTimeout();
+  siren.start();
+  vibrator.start();
+  setAppBadge(alarmQueue.length);
+  if (focus) els.alarmStop.focus({ preventScroll: true });
+  void acquireWakeLock();
+  updateTitle();
+}
+
+function stopRinging() {
+  siren.stop();
+  vibrator.stop();
+  window.clearTimeout(alarmTimer);
+  alarmTimer = 0;
+  ringing = false;
+  alarmQueue = [];
+  setAppBadge(0);
+  document.body.classList.remove('is-ringing');
+  els.alarm.hidden = true;
+  void releaseWakeLock();
+  renderQueue();
+  updateTitle();
+}
+
+function dismissAlarm() {
+  const done = alarmQueue.shift();
+  if (done) {
+    void closeSystemNotifications({ tag: `countdown-${done.id}`, registration: swRegistration });
+  }
+  if (!alarmQueue.length) {
+    stopRinging();
+    return;
+  }
+  renderAlarmCard();
+  armAlarmTimeout();
+  setAppBadge(alarmQueue.length);
+  void notifySystem(alarmQueue[0]);
+  updateTitle();
+}
+
+function handleFired(fired) {
+  let queued = false;
+  for (const item of fired) {
+    if (item.missed) {
+      showToast(`错过了「${cap(item.label)}」，原定 ${formatClock(item.firedAt)} 提醒。`);
+      continue;
+    }
+    alarmQueue.push(item);
+    queued = true;
+  }
+  if (!queued) return;
+  if (ringing) {
+    renderAlarmCard();
+    updateTitle();
+    return;
+  }
+  startRinging(true);
+  void notifySystem(alarmQueue[0]);
+}
+
+/** 结算到点的倒计时，并刷新读数。 */
+function tickCountdowns() {
+  const fired = countdowns.sync(Date.now());
+  if (fired.length) {
+    handleFired(fired);
+    renderQueue();
+  } else {
+    refreshQueueReadouts();
+  }
+  renderCarryover();
+  updateTitle();
+}
+
+function ensureCountdownTimer() {
+  if (countdownTimer) return;
+  countdownTimer = window.setInterval(() => {
+    if (mode !== COUNTDOWN && !countdowns.activeCount && !ringing) return;
+    tickCountdowns();
+  }, 250);
+}
+
+/* ---------- 交互：正计时 ---------- */
 
 function clearResetTimer() {
   window.clearTimeout(resetTimer);
@@ -175,18 +645,141 @@ function onMainClick() {
   renderAll();
 }
 
+/* ---------- 交互：倒计时 ---------- */
+
+function readMinutes() {
+  const value = Number.parseInt(els.minInput.value, 10);
+  return Number.isFinite(value) ? Math.min(1440, Math.max(0, value)) : 0;
+}
+
+function readSeconds() {
+  const value = Number.parseInt(els.secInput.value, 10);
+  return Number.isFinite(value) ? Math.min(59, Math.max(0, value)) : 0;
+}
+
+function syncChips() {
+  const minutes = readMinutes();
+  const seconds = readSeconds();
+  for (const chip of els.presets.querySelectorAll('.chip')) {
+    const active = Number(chip.dataset.minutes) === minutes && seconds === 0;
+    chip.setAttribute('aria-pressed', String(active));
+  }
+}
+
+function onPresetClick(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const chip = target?.closest('.chip');
+  if (!chip) return;
+  els.minInput.value = chip.dataset.minutes;
+  els.secInput.value = '0';
+  syncChips();
+}
+
+function onCountdownSubmit(event) {
+  event.preventDefault();
+
+  const label = els.labelInput.value.trim();
+  const durationMs = readMinutes() * 60_000 + readSeconds() * 1000;
+
+  if (!label) {
+    showToast('先写一句要提醒的事吧。');
+    els.labelInput.focus();
+    return;
+  }
+  if (durationMs < MIN_DURATION_MS) {
+    showToast('时长至少 1 秒。');
+    els.minInput.focus();
+    return;
+  }
+  if (durationMs > MAX_DURATION_MS) {
+    showToast('最长只能设 24 小时。');
+    return;
+  }
+
+  const item = countdowns.add({ label, durationMs });
+  if (!item) {
+    showToast(`同时最多排 ${countdowns.limit} 项，先清掉几条吧。`);
+    return;
+  }
+
+  siren.unlock();
+  void ensureNotificationPermission();
+  scheduleTrigger(item);
+  void acquireWakeLock();
+
+  els.labelInput.value = '';
+  renderQueue();
+  updateTitle();
+  showToast(`已排入：${describeDuration(item.durationMs)}后提醒「${cap(item.label)}」。`);
+  els.labelInput.focus();
+}
+
+function onQueueClick(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const button = target?.closest('button[data-action]');
+  const row = button?.closest('li[data-id]');
+  if (!button || !row) return;
+
+  const id = row.dataset.id;
+  const action = button.dataset.action;
+
+  if (action === 'toggle') {
+    const state = countdowns.toggle(id);
+    if (state === CD_RUNNING) {
+      void acquireWakeLock();
+      const current = countdowns.list().find((item) => item.id === id);
+      if (current) scheduleTrigger(current);
+    }
+  } else if (action === 'remove') {
+    void closeSystemNotifications({ tag: `countdown-${id}`, registration: swRegistration });
+    countdowns.remove(id);
+  } else if (action === 'repeat') {
+    const item = countdowns.repeat(id);
+    if (!item) {
+      showToast(`同时最多排 ${countdowns.limit} 项，先清掉几条吧。`);
+    } else {
+      scheduleTrigger(item);
+      showToast(`已重新排入：${describeDuration(item.durationMs)}后提醒「${cap(item.label)}」。`);
+    }
+  }
+
+  renderQueue();
+  renderCarryover();
+  updateTitle();
+}
+
+function onQueueClear() {
+  if (countdowns.clearFired()) {
+    renderQueue();
+    showToast('已清掉响过的提醒。');
+  }
+}
+
+/* ---------- 事件绑定 ---------- */
+
 function bindEvents() {
   els.mainBtn.addEventListener('click', onMainClick);
   els.resetBtn.addEventListener('click', onResetClick);
+  els.form.addEventListener('submit', onCountdownSubmit);
+  els.presets.addEventListener('click', onPresetClick);
+  els.minInput.addEventListener('input', syncChips);
+  els.secInput.addEventListener('input', syncChips);
+  els.queue.addEventListener('click', onQueueClick);
+  els.queueClear.addEventListener('click', onQueueClear);
+  els.alarmStop.addEventListener('click', dismissAlarm);
+
+  for (const button of els.modeBtns) {
+    button.addEventListener('click', () => setMode(button.dataset.mode));
+  }
+
+  els.carryoverBtn.addEventListener('click', () => setMode(STOPWATCH));
 
   els.list.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const button = target?.closest('button[data-action="delete"]');
     const row = button?.closest('li[data-id]');
     if (!row) return;
-    if (history.remove(row.dataset.id)) {
-      renderAll();
-    }
+    if (history.remove(row.dataset.id)) renderAll();
   });
 
   // 点击别处解除二次确认，避免按钮长时间停在「确认清空？」状态。
@@ -201,25 +794,47 @@ function bindEvents() {
     true
   );
 
+  // 首次用户交互时唤醒音频通道，这样到点响铃才有声音。
+  const unlock = () => siren.unlock();
+  document.addEventListener('pointerdown', unlock, { once: true, passive: true });
+  document.addEventListener('keydown', unlock, { once: true });
+
   // 回到前台时立刻用墙钟重算一次，读数不会因为后台节流而落后。
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) renderTimer();
+    if (document.hidden) return;
+    tickCountdowns();
+    renderAll();
+    void acquireWakeLock();
+  });
+
+  window.addEventListener('pagehide', () => {
+    // 页面被卸载或进入往返缓存时，把铃停掉，避免恢复后停在「响铃中」的假状态。
+    stopRinging();
   });
 }
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((error) => {
+  window.addEventListener('load', async () => {
+    try {
+      await navigator.serviceWorker.register('./sw.js');
+      swRegistration = await navigator.serviceWorker.ready;
+    } catch (error) {
       console.warn('[timer] Service Worker 注册失败：', error);
-    });
+    }
   });
 }
 
 function init() {
   bindEvents();
-  renderAll();
+  setMode(mode);
+  syncChips();
+  ensureLoop();
+  ensureCountdownTimer();
   registerServiceWorker();
+  // 打开时先结算一次：离线期间到点的倒计时会在这里被接住。
+  tickCountdowns();
+  void acquireWakeLock();
 }
 
 init();

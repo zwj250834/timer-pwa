@@ -8,6 +8,8 @@ const PRECACHE = [
   './manifest.webmanifest',
   './src/app.js',
   './src/timer.js',
+  './src/countdown.js',
+  './src/alarm.js',
   './src/history.js',
   './src/format.js',
   './src/reset-guard.js',

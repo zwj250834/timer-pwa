@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "零依赖秒表 PWA：开始、暂停、继续、重置，保留最近 10 条历史记录。",
+  "description": "零依赖计时器 PWA：正计时秒表 + 多路倒计时提醒（响铃、震动、系统通知）。",
   "scripts": {
     "test": "node --experimental-test-isolation=none --test \"tests/*.test.js\"",
     "dev": "node scripts/dev-server.mjs",

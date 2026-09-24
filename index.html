@@ -4,8 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>计时器</title>
-    <meta name="description" content="正计时秒表：开始、暂停、继续、重置，保留最近 10 条历史记录。" />
-    <meta name="theme-color" content="#0b1220" />
+    <meta
+      name="description"
+      content="正计时秒表 + 多路倒计时提醒：写下要提醒的事，到点响铃、震动并弹出系统通知。"
+    />
+    <meta name="theme-color" content="#0d1a19" />
     <meta name="color-scheme" content="dark light" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
@@ -16,31 +19,162 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body data-mode="stopwatch">
     <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
 
     <main class="app">
-      <section class="timer" aria-labelledby="timer-heading">
-        <h1 id="timer-heading" class="visually-hidden">计时器</h1>
-        <p class="timer__status" id="status">就绪</p>
-        <p class="timer__display" id="display">00:00:00.00</p>
+      <section class="panel panel--control" aria-label="计时控制">
+        <div class="mode" role="group" aria-label="计时方式">
+          <button
+            id="mode-stopwatch"
+            class="mode__btn"
+            type="button"
+            data-mode="stopwatch"
+            aria-pressed="true"
+            aria-controls="stopwatch-view history-view"
+          >
+            正计时
+          </button>
+          <button
+            id="mode-countdown"
+            class="mode__btn"
+            type="button"
+            data-mode="countdown"
+            aria-pressed="false"
+            aria-controls="countdown-view queue-view"
+          >
+            倒计时
+          </button>
+        </div>
 
-        <div class="timer__actions">
-          <button id="main-btn" class="btn btn--primary" type="button" data-state="idle">开始</button>
-          <button id="reset-btn" class="btn btn--ghost" type="button" disabled>重置</button>
+        <div id="stopwatch-view" class="view view--stopwatch">
+          <h2 class="visually-hidden">正计时</h2>
+          <p class="timer__status" id="status">就绪</p>
+          <p class="timer__display" id="display">00:00:00.00</p>
+          <div class="timer__actions">
+            <button id="main-btn" class="btn btn--primary" type="button" data-state="idle">
+              开始
+            </button>
+            <button id="reset-btn" class="btn btn--ghost" type="button" disabled>重置</button>
+          </div>
+        </div>
+
+        <div id="countdown-view" class="view view--countdown" hidden>
+          <h2 class="visually-hidden">倒计时</h2>
+
+          <p id="carryover" class="carryover" hidden>
+            <span id="carryover-text"></span>
+            <button id="carryover-btn" class="link" type="button">回到正计时</button>
+          </p>
+
+          <form id="countdown-form" class="setter" novalidate>
+            <label class="field" for="cd-label">
+              <span class="field__label">要提醒我什么</span>
+              <input
+                id="cd-label"
+                class="field__input"
+                name="label"
+                type="text"
+                maxlength="60"
+                placeholder="关火、吃药、开会……"
+                autocomplete="off"
+                enterkeyhint="done"
+              />
+            </label>
+
+            <fieldset class="field">
+              <legend class="field__label">多久后提醒</legend>
+              <div class="chips" id="cd-presets">
+                <button class="chip" type="button" data-minutes="1">1 分钟</button>
+                <button class="chip" type="button" data-minutes="3">3 分钟</button>
+                <button class="chip" type="button" data-minutes="5">5 分钟</button>
+                <button class="chip" type="button" data-minutes="10">10 分钟</button>
+                <button class="chip" type="button" data-minutes="15">15 分钟</button>
+                <button class="chip" type="button" data-minutes="30">30 分钟</button>
+              </div>
+              <div class="custom">
+                <label class="custom__field" for="cd-min">
+                  <input
+                    id="cd-min"
+                    class="custom__input"
+                    type="number"
+                    min="0"
+                    max="1439"
+                    step="1"
+                    inputmode="numeric"
+                    value="5"
+                  />
+                  <span>分</span>
+                </label>
+                <label class="custom__field" for="cd-sec">
+                  <input
+                    id="cd-sec"
+                    class="custom__input"
+                    type="number"
+                    min="0"
+                    max="59"
+                    step="1"
+                    inputmode="numeric"
+                    value="0"
+                  />
+                  <span>秒</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <button id="cd-submit" class="btn btn--primary" type="submit">开始倒计时</button>
+          </form>
         </div>
       </section>
 
-      <section class="history" aria-labelledby="history-heading">
-        <header class="history__header">
-          <h2 id="history-heading">历史记录</h2>
-          <span class="history__count"><span id="history-count">0</span>/10</span>
-        </header>
+      <section class="panel panel--list" aria-label="清单">
+        <div id="queue-view" class="view view--queue" hidden>
+          <header class="list__header">
+            <h2 class="list__title">待提醒</h2>
+            <span class="list__count"><span id="queue-count">0</span> 项</span>
+          </header>
 
-        <p id="history-empty" class="history__empty">暂无记录。每次暂停计时，都会在这里留下一条。</p>
-        <ol id="history-list" class="history__list"></ol>
+          <p id="queue-empty" class="empty">
+            还没有倒计时。写下要提醒的事，选好时长，到点会响铃叫你。
+          </p>
+          <ol id="queue" class="queue"></ol>
+
+          <button id="queue-clear" class="link link--quiet" type="button" hidden>
+            清除已响铃
+          </button>
+        </div>
+
+        <div id="history-view" class="view view--history">
+          <header class="list__header">
+            <h2 class="list__title">历史记录</h2>
+            <span class="list__count"><span id="history-count">0</span>/10</span>
+          </header>
+
+          <p id="history-empty" class="empty">
+            暂无记录。每次暂停计时，都会在这里留下一条。
+          </p>
+          <ol id="history-list" class="history"></ol>
+        </div>
       </section>
     </main>
+
+    <div
+      id="alarm"
+      class="alarm"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="alarm-label"
+      aria-describedby="alarm-meta"
+      hidden
+    >
+      <div class="alarm__card">
+        <p class="alarm__kick">时间到</p>
+        <p id="alarm-label" class="alarm__label"></p>
+        <p id="alarm-meta" class="alarm__meta"></p>
+        <p id="alarm-more" class="alarm__more" hidden></p>
+        <button id="alarm-stop" class="btn btn--alarm" type="button">停止响铃</button>
+      </div>
+    </div>
 
     <script type="module" src="./src/app.js"></script>
   </body>

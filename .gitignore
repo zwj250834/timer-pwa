@@ -3,6 +3,9 @@ node_modules/
 dist/
 .wrangler/
 .wrangler-dry-run/
+ci-logic.txt
+ci-build.txt
+ci-log.txt
 *.log
 .DS_Store
 Thumbs.db

@@ -1,0 +1,119 @@
+commit: 3c10a35e29f33bada5bd97601da11aa10880cf91
+run: 4
+logic: success
+build: success
+release: success
+apk_sha256: bf67cf86fc33f451482ceef9d6be11f459109d1f0069d5f3c464655dc6400a2f
+apk_bytes: 44758
+
+=== 逻辑自测 ===
+  ok   正计时初始为 idle
+  ok   初始读数为 0
+  ok   开始后 state=running
+  ok   读数随时间增长
+  ok   暂停后冻结读数
+  ok   继续后接着累加
+  ok   重置归零
+  ok   时间回拨不出负数
+  ok   重复 start 不清零
+  ok   历史最多 10 条
+  ok   最新的一条在最前
+  ok   最旧的一条被挤掉
+  ok   按 id 删除
+  ok   删不存在的返回 false
+  ok   序列化可以往返
+  ok   脏数据被忽略，合法数据保留
+  ok   duration 零点
+  ok   duration 进位
+  ok   duration 负数归零
+  ok   remaining 向上取整
+  ok   remaining 整分
+  ok   remaining 跨小时
+  ok   remaining 负数归零
+  ok   describeDuration 分钟
+  ok   describeDuration 小时
+  ok   describeDuration 秒
+  ok   endedAt 今天
+  ok   endedAt 昨天
+  ok   clock 非法输入为空
+  ok   空队列
+  ok   同时排两条
+  ok   最早的排在最前
+  ok   剩余时间按墙钟推算
+  ok   第二条也算对了
+  ok   事项会被清洗
+  ok   过短时长无效
+  ok   超长时长封顶
+  ok   暂停成功
+  ok   暂停后剩余冻结
+  ok   继续后重新推算
+  ok   切换暂停
+  ok   切换继续
+  ok   到点只结算一次
+  ok   结算后不再返回
+  ok   已响铃排在最后
+  ok   已响铃 activeCount 减一
+  ok   重复排一项
+  ok   清掉已响铃
+  ok   取消一条
+  ok   过期太久标记 missed
+  ok   上限内可添加
+  ok   超过上限被拒
+  ok   倒计时序列化往返
+  ok   脏数据被剔除、重复 id 只留一条
+  ok   nextDueAt 指向最近一条
+  ok   字段转义往返
+  ok   空字段保留
+  ok   空文本没有行
+
+通过 58 项，失败 0 项
+
+=== 构建 ===
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.10.2/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:javaPreCompileDebug FROM-CACHE
+> Task :app:checkDebugAarMetadata
+> Task :app:generateDebugResValues FROM-CACHE
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources FROM-CACHE
+> Task :app:mergeDebugResources FROM-CACHE
+> Task :app:packageDebugResources FROM-CACHE
+> Task :app:parseDebugLocalResources FROM-CACHE
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug FROM-CACHE
+> Task :app:processDebugMainManifest FROM-CACHE
+> Task :app:processDebugManifest FROM-CACHE
+> Task :app:processDebugManifestForPackage FROM-CACHE
+> Task :app:processDebugResources FROM-CACHE
+> Task :app:compileDebugJavaWithJavac FROM-CACHE
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :app:compressDebugAssets FROM-CACHE
+> Task :app:desugarDebugFileDependencies FROM-CACHE
+> Task :app:dexBuilderDebug FROM-CACHE
+> Task :app:mergeDebugGlobalSynthetics FROM-CACHE
+> Task :app:processDebugJavaRes NO-SOURCE
+> Task :app:mergeDebugStartupProfile
+> Task :app:checkDebugDuplicateClasses
+> Task :app:mergeDebugJniLibFolders
+> Task :app:mergeExtDexDebug FROM-CACHE
+> Task :app:mergeLibDexDebug FROM-CACHE
+> Task :app:mergeProjectDexDebug FROM-CACHE
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :app:mergeDebugJavaResource
+> Task :app:validateSigningDebug
+> Task :app:writeDebugAppMetadata
+> Task :app:writeDebugSigningConfigVersions
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/build-1790230445691.json
+
+BUILD SUCCESSFUL in 15s
+33 actionable tasks: 14 executed, 19 from cache

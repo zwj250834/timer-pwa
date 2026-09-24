@@ -578,6 +578,81 @@ body {
   color: var(--flare-text);
 }
 
+/* ---------- 推送设置 ---------- */
+
+.push {
+  margin: 0 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-row);
+}
+
+.push__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--radius-row);
+}
+
+.push__summary::marker {
+  color: var(--fg-dim);
+}
+
+.push__summary:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.push__state {
+  flex: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+
+.push__state[data-state='on'] {
+  color: var(--accent-text);
+}
+
+.push__state[data-state='error'] {
+  color: var(--flare-text);
+}
+
+.push__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.push__lead,
+.push__note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+
+.push__note[data-state='error'] {
+  color: var(--flare-text);
+}
+
+.push__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.push__actions .btn {
+  flex: 1 1 auto;
+  min-height: 48px;
+  font-size: 0.92rem;
+}
+
 /* ---------- 清单 ---------- */
 
 .view--queue,

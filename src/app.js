@@ -26,6 +26,7 @@ import {
   formatRemaining,
 } from './format.js';
 import { createKeepAlive, isAndroid } from './keep-alive.js';
+import { createPushClient } from './push.js';
 
 const MODE_KEY = 'timer.mode.v1';
 const KEEP_ALIVE_KEY = 'timer.keepAlive.v1';
@@ -68,6 +69,13 @@ const els = {
   keepAliveRow: document.getElementById('keep-alive-row'),
   keepAlive: document.getElementById('keep-alive'),
   keepAliveWarn: document.getElementById('keep-alive-warn'),
+  pushPanel: document.getElementById('push-panel'),
+  pushState: document.getElementById('push-state'),
+  pushUrl: document.getElementById('push-url'),
+  pushEnable: document.getElementById('push-enable'),
+  pushTest: document.getElementById('push-test'),
+  pushDisable: document.getElementById('push-disable'),
+  pushNote: document.getElementById('push-note'),
   // 提示层
   toast: document.getElementById('toast'),
   alarm: document.getElementById('alarm'),
@@ -147,6 +155,7 @@ const resetGuard = createResetGuard();
 const siren = createSiren();
 const vibrator = createVibrator();
 const keepAlive = createKeepAlive();
+const push = createPushClient();
 
 /* ---------- 正计时渲染 ---------- */
 
@@ -526,6 +535,107 @@ function setupKeepAlive() {
   syncKeepAlive({ force: true });
 }
 
+/* ---------- 熄屏提醒（自建推送服务） ---------- */
+
+const PUSH_SUPPORTED =
+  typeof globalThis.PushManager === 'function' && 'serviceWorker' in navigator;
+
+function renderPushState(state, note) {
+  const labels = { off: '未开启', on: '已开启', busy: '处理中…', error: '有问题' };
+  els.pushState.textContent = labels[state] ?? labels.off;
+  els.pushState.dataset.state = state === 'on' ? 'on' : state === 'error' ? 'error' : 'off';
+  if (note) {
+    els.pushNote.textContent = note;
+    els.pushNote.dataset.state = state === 'error' ? 'error' : '';
+  }
+  const ready = push.config().enabled;
+  els.pushEnable.hidden = ready;
+  els.pushTest.hidden = !ready;
+  els.pushDisable.hidden = !ready;
+  els.pushEnable.disabled = state === 'busy';
+}
+
+function setupPush() {
+  if (!PUSH_SUPPORTED) {
+    els.pushPanel.hidden = true;
+    return;
+  }
+  const config = push.config();
+  if (config.url) els.pushUrl.value = config.url;
+  if (config.enabled) {
+    renderPushState('on', `已开启。到点由 ${config.url} 发推送，锁屏也会响。`);
+  } else {
+    renderPushState('off');
+  }
+}
+
+/** 把当前还在跑的倒计时全部登记到服务端，保证两边一致。 */
+async function syncPushReminders() {
+  if (!push.config().enabled) return { ok: true };
+  const items = countdowns.list().filter((item) => item.state !== CD_FIRED);
+  for (const item of items) {
+    const result = await push.schedule({ id: item.id, at: item.endsAt, label: item.label });
+    if (!result.ok && !result.skipped) return result;
+  }
+  return { ok: true };
+}
+
+async function pushSchedule(item) {
+  if (!push.config().enabled || !item) return;
+  const result = await push.schedule({ id: item.id, at: item.endsAt, label: item.label });
+  if (!result.ok && !result.skipped) {
+    renderPushState('error', `同步失败：${result.error}`);
+  }
+}
+
+function pushCancel(id) {
+  if (!push.config().enabled) return;
+  void push.cancel(id);
+}
+
+async function onPushEnable() {
+  renderPushState('busy', '正在向浏览器申请通知权限…');
+  const result = await push.enable(els.pushUrl.value);
+  if (!result.ok) {
+    renderPushState('error', result.error);
+    showToast(result.error);
+    return;
+  }
+
+  els.pushUrl.value = result.url;
+  renderPushState('busy', '正在把现有的倒计时交给服务端…');
+  const sync = await syncPushReminders();
+  if (!sync.ok) {
+    renderPushState('error', `已开通，但同步失败：${sync.error}`);
+    showToast('已开通熄屏提醒，但有一项没同步成功。');
+    return;
+  }
+
+  renderPushState('on', `已开启。到点由 ${result.url} 发推送，锁屏也会响。`);
+  showToast('已开启熄屏提醒，可以点「发测试提醒」验证一下。');
+}
+
+async function onPushDisable() {
+  renderPushState('busy', '正在关闭…');
+  await push.disable();
+  renderPushState('off', '已关闭熄屏提醒，服务端不再保留你的订阅和提醒。');
+  showToast('已关闭熄屏提醒。');
+}
+
+async function onPushTest() {
+  els.pushTest.disabled = true;
+  showToast('正在发送测试提醒…');
+  const result = await push.test();
+  els.pushTest.disabled = false;
+  if (result.ok) {
+    renderPushState('on', '测试提醒已发出。锁屏后应该会弹出通知。');
+    showToast('已发送。把手机锁屏，几秒内应该会响。');
+  } else {
+    renderPushState('error', result.error);
+    showToast(result.error);
+  }
+}
+
 /** 图标上的小红点：系统层面再提醒一次「有事项到点了」。 */
 function setAppBadge(count) {
   try {
@@ -787,6 +897,7 @@ function onCountdownSubmit(event) {
   syncKeepAlive({ force: true });
   void ensureNotificationPermission();
   scheduleTrigger(item);
+  void pushSchedule(item);
   void acquireWakeLock();
 
   els.labelInput.value = '';
@@ -807,13 +918,17 @@ function onQueueClick(event) {
 
   if (action === 'toggle') {
     const state = countdowns.toggle(id);
+    const current = countdowns.list().find((item) => item.id === id);
     if (state === CD_RUNNING) {
       void acquireWakeLock();
-      const current = countdowns.list().find((item) => item.id === id);
       if (current) scheduleTrigger(current);
+      void pushSchedule(current);
+    } else if (state === CD_PAUSED) {
+      pushCancel(id);
     }
   } else if (action === 'remove') {
     void closeSystemNotifications({ tag: `countdown-${id}`, registration: swRegistration });
+    pushCancel(id);
     countdowns.remove(id);
   } else if (action === 'repeat') {
     const item = countdowns.repeat(id);
@@ -821,6 +936,7 @@ function onQueueClick(event) {
       showToast(`同时最多排 ${countdowns.limit} 项，先清掉几条吧。`);
     } else {
       scheduleTrigger(item);
+      void pushSchedule(item);
       showToast(`已重新排入：${describeDuration(item.durationMs)}后提醒「${cap(item.label)}」。`);
     }
   }
@@ -852,6 +968,9 @@ function bindEvents() {
   els.queueClear.addEventListener('click', onQueueClear);
   els.keepAlive.addEventListener('change', onKeepAliveChange);
   els.alarmStop.addEventListener('click', dismissAlarm);
+  els.pushEnable.addEventListener('click', onPushEnable);
+  els.pushTest.addEventListener('click', onPushTest);
+  els.pushDisable.addEventListener('click', onPushDisable);
 
   for (const button of els.modeBtns) {
     button.addEventListener('click', () => setMode(button.dataset.mode));
@@ -924,11 +1043,14 @@ function init() {
   setMode(mode);
   syncChips();
   setupKeepAlive();
+  setupPush();
   ensureLoop();
   ensureCountdownTimer();
   registerServiceWorker();
   // 打开时先结算一次：离线期间到点的倒计时会在这里被接住。
   tickCountdowns();
+  // 服务端可能被重置过（重新部署、换了 Worker），开机时对一次表。
+  void syncPushReminders();
   void acquireWakeLock();
 }
 

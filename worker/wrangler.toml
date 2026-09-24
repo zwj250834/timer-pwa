@@ -1,0 +1,18 @@
+# 计时器的推送服务。部署：cd worker && npx wrangler login && npx wrangler deploy
+name = "timer-push"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# 提醒和订阅都存在这一个 Durable Object 里：它自带 alarm，能毫秒级定时。
+[[durable_objects.bindings]]
+name = "REMINDERS"
+class_name = "Reminders"
+
+# 免费版要用 SQLite 版的 Durable Object，这个迁移声明就是干这个的。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Reminders"]
+
+# 兜底：每分钟扫一次，防止某次 alarm 被漏掉。真正的定时靠 alarm。
+[triggers]
+crons = ["* * * * *"]

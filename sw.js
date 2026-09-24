@@ -11,6 +11,7 @@ const PRECACHE = [
   './src/countdown.js',
   './src/alarm.js',
   './src/keep-alive.js',
+  './src/push.js',
   './src/history.js',
   './src/format.js',
   './src/reset-guard.js',
@@ -81,6 +82,50 @@ self.addEventListener('fetch', (event) => {
         cache.put(request, response.clone());
       }
       return response;
+    })()
+  );
+});
+
+/**
+ * 服务端推送：这是唯一能在手机锁屏、页面被冻结时把用户叫醒的通道。
+ * 负载由 worker 加密发送，这里解密后直接交给系统通知栏，锁屏也会响铃震动。
+ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: '时间到', body: event.data ? event.data.text() : '' };
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || '时间到', {
+      body: data.body || '',
+      tag: data.tag || 'timer-push',
+      icon: new URL('./icons/icon-192.png', self.location.href).href,
+      badge: new URL('./icons/icon-192.png', self.location.href).href,
+      // 常驻显示，直到用户自己划掉：闹钟性质的提醒不该自己消失
+      requireInteraction: true,
+      vibrate: [600, 350, 600, 350, 600, 1200],
+      data: { url: data.url || './' },
+    })
+  );
+});
+
+/** 点通知：已经在看这个应用就切过去，否则打开它。 */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || './', self.location.href).href;
+
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        if (client.url.startsWith(self.registration.scope) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
     })()
   );
 });

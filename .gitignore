@@ -1,6 +1,8 @@
 node_modules/
 .pnpm-store/
 dist/
+.wrangler/
+.wrangler-dry-run/
 *.log
 .DS_Store
 Thumbs.db

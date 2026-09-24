@@ -47,6 +47,7 @@ npm run icons # 重新生成图标 PNG
 - 关掉页面期间到点的：1 小时内算「刚刚」，下次打开会补响；超过 1 小时标记为「已错过」，只提示不响铃
 - 已响铃的项留在列表里，可以「再来一次」或删除，也可以一次「清除已响铃」
 - Android 上默认开启「熄屏也保持响铃」保活（见下），让关掉屏幕时也有机会准点响
+- 想彻底解决熄屏提醒，可以部署 `worker/` 里的推送服务（见下），由系统推送叫醒手机
 - 队列存在 `localStorage` 的 `timer.countdowns.v1`，模式存在 `timer.mode.v1`
 
 ### 熄屏提醒能做到什么
@@ -74,7 +75,55 @@ npm run icons # 重新生成图标 PNG
 - iOS 上没有保活这条路（后台会挂起 JS），熄屏提醒只能靠推送服务。
 
 想做到「熄屏必响、跨机型都一样」只有一条路：接入 Web Push，由服务器在到点时刻投递推送，
-系统唤醒 Service Worker 弹出通知。这需要一台服务器，本项目目前没有后端。
+系统唤醒 Service Worker 弹出通知。这需要一台服务器，见下一节。
+
+## 熄屏提醒（自建推送服务，可选）
+
+`worker/` 目录里是一个 Cloudflare Worker，负责「到点发推送」：手机锁屏、浏览器被冻结、
+甚至应用没打开，推送都会由系统弹到通知栏（响铃 + 震动 + 常驻显示，直到你划掉）。
+提醒时刻和事项只经过你自己的 Worker，不经过任何第三方。
+
+### 一、部署 Worker（一次性，约 3 分钟）
+
+```bash
+cd worker
+npx wrangler login      # 浏览器里点一下授权，免费账号即可
+npx wrangler deploy
+```
+
+部署成功后会打印一行地址，形如 `https://timer-push.<你的子域名>.workers.dev`，复制它。
+配置里已经声明好了 Durable Object（毫秒级定时）和每分钟一次的 cron 兜底，不需要手工建任何东西。
+
+### 二、在应用里开启
+
+1. 打开计时器 → 倒计时 → 展开「熄屏提醒（自建推送服务）」
+2. 把上一步的地址粘进「Worker 地址」，点「开启熄屏提醒」，允许通知权限
+3. 点「发测试提醒」，然后**锁屏**：几秒内应该弹出一条通知，这条能到就说明链路通了
+
+开启之后，每新建一条倒计时都会自动登记到服务端；暂停会撤销，继续会重新登记，取消会删掉。
+关掉开关时，Worker 上的订阅和提醒会被一并清除。
+
+### 三、要注意的地方
+
+- **中国大陆网络**：Android Chrome 的推送走 FCM（`fcm.googleapis.com`），在部分网络下不可达。
+  所以第二步的「发测试提醒」是必须做的验证——收不到就说明这条路在你的网络下走不通，
+  那就只能靠上面的保活 + 前台响铃。
+- **成本**：Cloudflare 免费额度足够个人使用（Worker 10 万次请求/天、Durable Object 按请求计）。
+- **精度**：到点时刻用 Durable Object 的 alarm 触发，秒级；cron 每分钟兜底补发。
+- 迟到超过 6 小时的提醒不会再补发，避免早上醒来被昨晚的提醒刷屏。
+- 推送服务返回 410/404（订阅失效，例如重装浏览器）时，Worker 会自动清掉那条订阅和它的提醒。
+
+### 四、接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/config` | 返回 VAPID 公钥（首次访问时自动生成并保存） |
+| POST | `/schedule` | `{ subscription, reminder: { id, at, label } }` 登记提醒 |
+| POST | `/cancel` | `{ id }` 撤销一条 |
+| POST | `/cancel-all` | `{ endpoint }` 清掉该订阅的全部提醒 |
+| POST | `/test` | `{ subscription }` 立刻发一条测试推送 |
+
+只放行 `https://zwj250834.github.io` 与本机 `localhost`/`127.0.0.1` 的跨域请求。
 
 
 ## 部署
@@ -102,11 +151,13 @@ src/timer.js                   正计时状态机（纯逻辑）
 src/countdown.js               多路倒计时队列与持久化（纯逻辑）
 src/alarm.js                   蜂鸣、震动、系统通知（可注入依赖的平台封装）
 src/keep-alive.js              熄屏保活：生成极低电平音频并维持后台播放
+src/push.js                    自建推送服务的接入（订阅、登记、撤销）
 src/history.js                 历史记录与持久化（纯逻辑）
 src/format.js                  时间格式化（纯逻辑）
 src/reset-guard.js             重置二次确认（纯逻辑）
 src/app.js                     DOM 绑定与渲染
-sw.js                          应用外壳缓存
+sw.js                          应用外壳缓存 + 推送通知的处理
 scripts/                       零依赖的开发服务器、构建、图标生成
+worker/                        Cloudflare Worker：Web Push 加密、VAPID、精确定时
 tests/                         node:test 单元测试
 ```

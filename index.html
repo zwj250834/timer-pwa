@@ -137,6 +137,43 @@
               </span>
             </span>
           </label>
+
+          <details id="push-panel" class="push">
+            <summary class="push__summary">
+              <span class="push__name">熄屏提醒（自建推送服务）</span>
+              <span class="push__state" id="push-state">未开启</span>
+            </summary>
+
+            <div class="push__body">
+              <p class="push__lead">
+                锁屏后浏览器会被系统冻结，只有服务器推送能把手机叫醒。把下面填成你自己的 Worker
+                地址，到点由系统弹通知，熄屏也响；提醒时刻和事项只经过你自己的服务。
+              </p>
+
+              <label class="field" for="push-url">
+                <span class="field__label">Worker 地址</span>
+                <input
+                  id="push-url"
+                  class="field__input"
+                  type="url"
+                  inputmode="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="https://timer-push.xxx.workers.dev"
+                />
+              </label>
+
+              <div class="push__actions">
+                <button id="push-enable" class="btn btn--primary" type="button">开启熄屏提醒</button>
+                <button id="push-test" class="btn btn--ghost" type="button" hidden>发测试提醒</button>
+                <button id="push-disable" class="btn btn--ghost" type="button" hidden>关闭</button>
+              </div>
+
+              <p id="push-note" class="push__note">
+                还没配置。部署步骤见 README 的「熄屏提醒」一节，用 Cloudflare 免费额度就够。
+              </p>
+            </div>
+          </details>
         </div>
       </section>
 
